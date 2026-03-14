@@ -49,17 +49,23 @@ Extract and place the binary somewhere in your `$PATH`.
 
 ## Output format
 
-The YOLO detection head decode logic (sigmoid, grid offsets, anchor application) is embedded into the ONNX graph. All heads are concatenated into a single output tensor:
-
-```
-[1, N, 5 + num_classes]
-```
-
-where `N` is the total number of predictions across all heads and `5 = cx, cy, w, h, objectness`.
+The YOLO detection head decode logic (sigmoid, grid offsets, anchor application) is embedded into the ONNX graph. All heads are concatenated into a single output tensor.
 
 Coordinates `cx, cy, w, h` are in absolute pixel units relative to the input image dimensions.
 
-This could not work for you, but in my case this format is compatible with `ModelYOLOv5Ort` / `Model::yolov5_ort()` in [od_opencv](https://github.com/LdDl/object-detection-opencv-rust). 
+Two output formats are available via `--format`:
+
+| Format | Shape | Description |
+|--------|-------|-------------|
+| `yolov5` (default) | `[1, N, 5+C]` | With objectness: `cx, cy, w, h, obj, cls0..clsN` |
+| `yolov8` | `[1, 4+C, N]` | Without objectness: `cx, cy, w, h, cls0..clsN` (obj baked into cls scores) |
+
+where `N` is the total number of predictions and `C` is the number of classes.
+
+This could not work for you, but in my case these formats are compatible with [od_opencv](https://github.com/LdDl/object-detection-opencv-rust):
+- `yolov5` -> `Model::yolov5_ort()`
+- `yolov8` -> `Model::ort()`
+
 
 ## Build from source
 
@@ -89,6 +95,7 @@ Cross-compile for all platforms (linux/windows/macOS, amd64/arm64):
 | `--weights` | (required) | Path to Darknet `.weights` file |
 | `--output` | `model.onnx` | Output ONNX file path |
 | `--opset` | `12` | ONNX opset version |
+| `--format` | `yolov5` | Output format: `yolov5` or `yolov8` |
 
 ### Example
 

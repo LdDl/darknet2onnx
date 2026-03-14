@@ -7,16 +7,29 @@ import (
 	pb "github.com/LdDl/darknet2onnx/onnxpb"
 )
 
+// OutputFormat defines the output tensor layout.
+type OutputFormat string
+
+const (
+	// FormatYOLOv5 produces [1, N, 5+C] with objectness score.
+	FormatYOLOv5 OutputFormat = "yolov5"
+
+	// FormatYOLOv8 produces [1, 4+C, N] without objectness score.
+	// Objectness is multiplied into class scores inside the ONNX graph.
+	FormatYOLOv8 OutputFormat = "yolov8"
+)
+
 // ConvertResult holds the final ONNX model.
 type ConvertResult struct {
 	Model       *pb.ModelProto
 	InputShape  Shape
 	OutputShape []int64
 	NumLayers   int
+	Format      OutputFormat
 }
 
 // Convert transforms Darknet cfg+weights into an ONNX ModelProto.
-func Convert(sections []darknet.Section, weights []darknet.LayerWeights, opsetVersion int64) (*ConvertResult, error) {
+func Convert(sections []darknet.Section, weights []darknet.LayerWeights, opsetVersion int64, format OutputFormat) (*ConvertResult, error) {
 	netParams := darknet.GetNetParams(sections)
 
 	inputShape := Shape{
@@ -163,15 +176,15 @@ func Convert(sections []darknet.Section, weights []darknet.LayerWeights, opsetVe
 		return nil, fmt.Errorf("no [yolo] layers found in cfg")
 	}
 
-	var finalOutputName string
+	var concatOutputName string
 	if len(yoloOutputs) == 1 {
-		finalOutputName = yoloOutputs[0]
+		concatOutputName = yoloOutputs[0]
 	} else {
-		finalOutputName = "detections"
+		concatOutputName = "detections_raw"
 		concatNode := &pb.NodeProto{
 			OpType: "Concat",
 			Input:  yoloOutputs,
-			Output: []string{finalOutputName},
+			Output: []string{concatOutputName},
 			Attribute: []*pb.AttributeProto{
 				makeAttrInt("axis", 1),
 			},
@@ -179,12 +192,73 @@ func Convert(sections []darknet.Section, weights []darknet.LayerWeights, opsetVe
 		allNodes = append(allNodes, concatNode)
 	}
 
-	// Calculate total predictions
-	// We don't know exact N here without running shape inference on yolo outputs,
-	// so use -1 (dynamic) for the middle dimension
-	numClasses := sections[len(sections)-1].GetInt("classes", 80) // last yolo section
-	boxAttrs := int64(5 + numClasses)
-	outputShape := []int64{1, -1, boxAttrs}
+	numClasses := sections[len(sections)-1].GetInt("classes", 80)
+	var outputShape []int64
+	var finalOutputName string
+
+	if format == FormatYOLOv8 {
+		// Transform [1, N, 5+C] -> [1, 4+C, N]
+		// 1. Split into [cx,cy,w,h], [obj], [cls0..clsN] along axis=2
+		// [1, N, 4]
+		bboxOut := "post_bbox"
+		// [1, N, 1]
+		objOut := "post_obj"
+		// [1, N, C]
+		clsOut := "post_cls"
+
+		allNodes = append(allNodes, &pb.NodeProto{
+			OpType: "Split",
+			Input:  []string{concatOutputName},
+			Output: []string{bboxOut, objOut, clsOut},
+			Attribute: []*pb.AttributeProto{
+				makeAttrInts("split", []int64{4, 1, int64(numClasses)}),
+				makeAttrInt("axis", 2),
+			},
+		})
+
+		// 2. Multiply objectness into class scores: conf = obj * cls
+		confOut := "post_conf" // [1, N, C]
+		allNodes = append(allNodes, &pb.NodeProto{
+			OpType: "Mul",
+			Input:  []string{objOut, clsOut},
+			Output: []string{confOut},
+		})
+
+		// 3. Concat bbox + conf: [1, N, 4+C]
+		mergedOut := "post_merged"
+		allNodes = append(allNodes, &pb.NodeProto{
+			OpType: "Concat",
+			Input:  []string{bboxOut, confOut},
+			Output: []string{mergedOut},
+			Attribute: []*pb.AttributeProto{
+				makeAttrInt("axis", 2),
+			},
+		})
+
+		// 4. Transpose [1, N, 4+C] -> [1, 4+C, N]
+		finalOutputName = "detections"
+		allNodes = append(allNodes, &pb.NodeProto{
+			OpType: "Transpose",
+			Input:  []string{mergedOut},
+			Output: []string{finalOutputName},
+			Attribute: []*pb.AttributeProto{
+				makeAttrInts("perm", []int64{0, 2, 1}),
+			},
+		})
+
+		outputShape = []int64{1, int64(4 + numClasses), -1}
+	} else {
+		// yolov5 format: [1, N, 5+C] as-is
+		finalOutputName = "detections"
+		if concatOutputName != finalOutputName {
+			allNodes = append(allNodes, &pb.NodeProto{
+				OpType: "Identity",
+				Input:  []string{concatOutputName},
+				Output: []string{finalOutputName},
+			})
+		}
+		outputShape = []int64{1, -1, int64(5 + numClasses)}
+	}
 
 	// Build graph
 	graph := &pb.GraphProto{
@@ -204,7 +278,7 @@ func Convert(sections []darknet.Section, weights []darknet.LayerWeights, opsetVe
 
 	// Build model
 	model := &pb.ModelProto{
-		IrVersion: 7, // ONNX IR version for opset 12
+		IrVersion: 7,
 		OpsetImport: []*pb.OperatorSetIdProto{
 			{Version: opsetVersion},
 		},
@@ -218,5 +292,6 @@ func Convert(sections []darknet.Section, weights []darknet.LayerWeights, opsetVe
 		InputShape:  inputShape,
 		OutputShape: outputShape,
 		NumLayers:   layerIdx,
+		Format:      format,
 	}, nil
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/LdDl/darknet2onnx/converter"
@@ -10,16 +11,21 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+func init() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+}
+
 func main() {
 	cfgPath := flag.String("cfg", "", "Path to Darknet .cfg file (required)")
 	weightsPath := flag.String("weights", "", "Path to Darknet .weights file (required)")
 	outputPath := flag.String("output", "model.onnx", "Output ONNX file path")
 	opset := flag.Int64("opset", 12, "ONNX opset version")
+	format := flag.String("format", "yolov5", "Output format: yolov5 [1,N,5+C] or yolov8 [1,4+C,N]")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "darknet2onnx - Convert Darknet .cfg+.weights to ONNX\n\n")
 		fmt.Fprintf(os.Stderr, "Usage:\n")
-		fmt.Fprintf(os.Stderr, "  darknet2onnx --cfg model.cfg --weights model.weights [--output model.onnx] [--opset 12]\n\n")
+		fmt.Fprintf(os.Stderr, "  darknet2onnx --cfg model.cfg --weights model.weights [--output model.onnx] [--opset 12] [--format yolov5]\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
 		flag.PrintDefaults()
 	}
@@ -31,53 +37,73 @@ func main() {
 		os.Exit(1)
 	}
 
+	var outputFormat converter.OutputFormat
+	switch *format {
+	case "yolov5":
+		outputFormat = converter.FormatYOLOv5
+	case "yolov8":
+		outputFormat = converter.FormatYOLOv8
+	default:
+		slog.Error("unknown format, expected yolov5 or yolov8", slog.String("format", *format))
+		os.Exit(1)
+	}
+
 	// Parse .cfg
-	fmt.Printf("Parsing cfg: %s\n", *cfgPath)
+	slog.Info("parsing cfg", slog.String("path", *cfgPath))
 	sections, err := darknet.ParseCfgFile(*cfgPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing cfg: %v\n", err)
+		slog.Error("failed to parse cfg", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
-	fmt.Printf("  Found %d sections\n", len(sections))
 
-	// Print network params
 	netParams := darknet.GetNetParams(sections)
-	fmt.Printf("  Input: %dx%dx%d\n", netParams.Width, netParams.Height, netParams.Channels)
+	slog.Info("cfg parsed",
+		slog.Int("sections", len(sections)),
+		slog.Int("width", netParams.Width),
+		slog.Int("height", netParams.Height),
+		slog.Int("channels", netParams.Channels),
+	)
 
 	// Read .weights
-	fmt.Printf("Reading weights: %s\n", *weightsPath)
+	slog.Info("reading weights", slog.String("path", *weightsPath))
 	weights, err := darknet.ReadWeights(*weightsPath, sections)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading weights: %v\n", err)
+		slog.Error("failed to read weights", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
-	fmt.Printf("  Loaded %d convolutional layers\n", len(weights))
+	slog.Info("weights loaded", slog.Int("conv_layers", len(weights)))
 
 	// Convert to ONNX
-	fmt.Printf("Converting to ONNX (opset %d)...\n", *opset)
-	result, err := converter.Convert(sections, weights, *opset)
+	slog.Info("converting to ONNX",
+		slog.Int64("opset", *opset),
+		slog.String("format", *format),
+	)
+	result, err := converter.Convert(sections, weights, *opset, outputFormat)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error converting: %v\n", err)
+		slog.Error("failed to convert", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 
 	// Serialize
 	data, err := proto.Marshal(result.Model)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error serializing ONNX model: %v\n", err)
+		slog.Error("failed to serialize ONNX model", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 
 	// Write to file
-	if err := os.WriteFile(*outputPath, data, 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "Error writing output file: %v\n", err)
+	err = os.WriteFile(*outputPath, data, 0644)
+	if err != nil {
+		slog.Error("failed to write output file", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 
-	fmt.Printf("\nDone!\n")
-	fmt.Printf("  Output: %s\n", *outputPath)
-	fmt.Printf("  Input shape: [1, %d, %d, %d]\n", result.InputShape.C, result.InputShape.H, result.InputShape.W)
-	fmt.Printf("  Output shape: [1, N, %d]\n", result.OutputShape[2])
-	fmt.Printf("  Layers: %d\n", result.NumLayers)
-	fmt.Printf("  File size: %.2f MB\n", float64(len(data))/1024/1024)
+	slog.Info("done",
+		slog.String("output", *outputPath),
+		slog.String("format", string(result.Format)),
+		slog.String("input_shape", fmt.Sprintf("[1, %d, %d, %d]", result.InputShape.C, result.InputShape.H, result.InputShape.W)),
+		slog.String("output_shape", fmt.Sprintf("%v", result.OutputShape)),
+		slog.Int("layers", result.NumLayers),
+		slog.Float64("file_size_mb", float64(len(data))/1024/1024),
+	)
 }
