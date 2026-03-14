@@ -1,0 +1,12 @@
+main
+main.exe
+darknet2onnx
+darknet2onnx.exe
+venv/
+.venv/
+linux-amd64-darknet2onnx.tar.gz
+linux-arm64-darknet2onnx.tar.gz
+windows-amd64-darknet2onnx.zip
+darwin-amd64-darknet2onnx.tar.gz
+darwin-arm64-darknet2onnx.tar.gz
+testdata/
