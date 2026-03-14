@@ -6,9 +6,10 @@ A standalone Go CLI tool that produces a single static binary with no Python or 
 
 ## Table of Contents
 
+- [Installation](#installation)
 - [Supported models](#supported-models)
 - [Output format](#output-format)
-- [Build](#build)
+- [Build from source](#build-from-source)
 - [Usage](#usage)
   - [Flags](#flags)
   - [Example](#example)
@@ -17,6 +18,28 @@ A standalone Go CLI tool that produces a single static binary with no Python or 
 - [Protobuf source](#protobuf-source)
 - [How it works](#how-it-works)
 - [License](#license)
+
+## Installation
+
+### From Go
+
+```bash
+go install github.com/LdDl/darknet2onnx@latest
+```
+
+### Pre-built binaries
+
+Download the latest release for your platform from [Releases](https://github.com/LdDl/darknet2onnx/releases/latest):
+
+| Platform | Archive |
+|----------|---------|
+| Linux amd64 | [`linux-amd64-darknet2onnx.tar.gz`](https://github.com/LdDl/darknet2onnx/releases/latest/download/linux-amd64-darknet2onnx.tar.gz) |
+| Linux arm64 | [`linux-arm64-darknet2onnx.tar.gz`](https://github.com/LdDl/darknet2onnx/releases/latest/download/linux-arm64-darknet2onnx.tar.gz) |
+| macOS amd64 | [`darwin-amd64-darknet2onnx.tar.gz`](https://github.com/LdDl/darknet2onnx/releases/latest/download/darwin-amd64-darknet2onnx.tar.gz) |
+| macOS arm64 | [`darwin-arm64-darknet2onnx.tar.gz`](https://github.com/LdDl/darknet2onnx/releases/latest/download/darwin-arm64-darknet2onnx.tar.gz) |
+| Windows amd64 | [`windows-amd64-darknet2onnx.zip`](https://github.com/LdDl/darknet2onnx/releases/latest/download/windows-amd64-darknet2onnx.zip) |
+
+Extract and place the binary somewhere in your `$PATH`.
 
 ## Supported models
 
@@ -38,7 +61,7 @@ Coordinates `cx, cy, w, h` are in absolute pixel units relative to the input ima
 
 This could not work for you, but in my case this format is compatible with `ModelYOLOv5Ort` / `Model::yolov5_ort()` in [od_opencv](https://github.com/LdDl/object-detection-opencv-rust). 
 
-## Build
+## Build from source
 
 Simple build for the current platform:
 
