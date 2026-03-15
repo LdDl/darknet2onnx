@@ -28,11 +28,15 @@ func BuildMaxPool(
 
 	outName := prefix + "_maxpool"
 
-	// Darknet maxpool with stride=1 uses same-padding to preserve spatial dims
+	// Darknet maxpool with stride=1 uses asymmetric padding to preserve spatial dims.
+	// pad_total = size - 1; top/left = pad_total/2; bottom/right = pad_total - top/left.
+	// For size=2: pads=[0,0,1,1]; for size=3: pads=[1,1,1,1].
 	var pads []int64
 	if stride == 1 {
-		p := int64(size / 2)
-		pads = []int64{p, p, p, p}
+		padTotal := int64(size - 1)
+		padBefore := padTotal / 2
+		padAfter := padTotal - padBefore
+		pads = []int64{padBefore, padBefore, padAfter, padAfter}
 	} else {
 		pads = []int64{0, 0, 0, 0}
 	}

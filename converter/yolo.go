@@ -49,6 +49,8 @@ func BuildYoloDecode(
 	}
 	numClasses := sec.GetInt("classes", 80)
 
+	scaleXY := sec.GetFloat("scale_x_y", 1.0)
+
 	numAnchors := len(mask)
 	gridH := inputShape.H
 	gridW := inputShape.W
@@ -132,11 +134,37 @@ func BuildYoloDecode(
 		},
 	})
 
-	// sigmoid(tx) + grid_offset
+	// Apply scale_x_y: sigmoid(tx) * scale_x_y - (scale_x_y - 1) / 2 + grid
+	var xyBeforeGrid string
+	if scaleXY != 1.0 {
+		scaleName := prefix + "_scale_xy_val"
+		offsetName := prefix + "_scale_xy_offset"
+		inits = append(inits,
+			makeFloatTensor(scaleName, []int64{1}, []float32{float32(scaleXY)}),
+			makeFloatTensor(offsetName, []int64{1}, []float32{float32((scaleXY - 1.0) / 2.0)}),
+		)
+		mulOut := prefix + "_sig_scaled"
+		nodes = append(nodes, &pb.NodeProto{
+			OpType: "Mul",
+			Input:  []string{sigTxTy, scaleName},
+			Output: []string{mulOut},
+		})
+		subOut := prefix + "_sig_shifted"
+		nodes = append(nodes, &pb.NodeProto{
+			OpType: "Sub",
+			Input:  []string{mulOut, offsetName},
+			Output: []string{subOut},
+		})
+		xyBeforeGrid = subOut
+	} else {
+		xyBeforeGrid = sigTxTy
+	}
+
+	// scaled_sigmoid(tx) + grid_offset
 	addedXY := prefix + "_added_xy"
 	nodes = append(nodes, &pb.NodeProto{
 		OpType: "Add",
-		Input:  []string{sigTxTy, gridXY},
+		Input:  []string{xyBeforeGrid, gridXY},
 		Output: []string{addedXY},
 	})
 
