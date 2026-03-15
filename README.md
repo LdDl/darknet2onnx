@@ -169,7 +169,67 @@ protoc -I proto proto/onnx.proto3 --go_out=./onnxpb --go_opt=paths=source_relati
 
 ## How it works
 
-@todo
+The converter runs a three-stage pipeline:
+
+1. Parse `.cfg`
+
+`darknet/cfg.go` reads the Darknet configuration file line by line. The first section (`[net]`) provides input dimensions (width, height, channels). Subsequent sections define the layer stack: `[convolutional]`, `[maxpool]`, `[route]`, `[shortcut]`, `[upsample]`, `[yolo]`.
+Pretty straighforward parsing logic I suppose.
+
+2. Read `.weights`
+
+`darknet/weights.go` reads the binary weights file. The header contains format version and training metadata. For each convolutional layer (in the given order) the reader extracts:
+- Biases (`filters` floats)
+- BatchNorm parameters if `batch_normalize=1` (scales, means, variances)
+- Convolution kernel weights (`filters x in_channels/groups x kernel x kernel`)
+
+Note: non-convolutional layers have no weights but affect channel tracking for subsequent layers.
+
+3. Build ONNX graph
+
+`converter/converter.go` iterates the parsed sections and dispatches each layer to a dedicated builder. A `ShapeTracker` keeps output shapes of all layers to resolve forward references in `[route]` and `[shortcut]` layers (which reference by relative/absolute index).
+
+Each Darknet layer maps to standard ONNX operators:
+
+| Builder | ONNX nodes |
+|---------|-----------|
+| `BuildConv` | Conv + BatchNormalization + activation |
+| `BuildMaxPool` | MaxPool (asymmetric padding when stride=1) |
+| `BuildRoute` | Concat (multi-layer), Slice (groups), or passthrough |
+| `BuildShortcut` | Add + activation |
+| `BuildUpsample` | Resize (nearest, scales mode) |
+| `BuildYoloDecode` | Decode subgraph (about 20 nodes, see below) |
+
+Activations (`converter/activation.go`) are decomposed into ONNX primitives: `leaky`; LeakyRelu, `mish`; Softplus+Tanh+Mul, `swish`; Sigmoid+Mul, `logistic`; Sigmoid, `linear`; no-op.
+
+4. YOLO decode subgraph
+
+Each `[yolo]` layer takes raw convolution output `[1, A*(5+C), H, W]` and produces decoded predictions `[1, A*H*W, 5+C]` with absolute pixel coordinates:
+
+1. Reshape: `[1, A*(5+C), H, W]`; `[1, A, 5+C, H, W]`
+2. Transpose:; `[1, A, H, W, 5+C]`
+3. Split: separate `tx,ty` / `tw,th` / `obj+classes`
+4. Activate: Sigmoid on `tx,ty,obj,cls` (skipped when `new_coords=1`, since `[convolutional]` before yolo already applies `activation=logistic`)
+5. Decode `xy`: apply `scale_x_y` if present, add grid offsets, multiply by stride
+6. Decode `wh`: `exp(tw) * anchor` (standard) or `(tw*2)^2 * anchor` (when `new_coords=1`)
+7. Concat + Reshape: `[1, A*H*W, 5+C]`
+
+Grid coordinates and anchor values are pre-computed and stored as ONNX initializers.
+
+5. Output fusion
+
+All YOLO head outputs are concatenated along axis 1 into a single tensor:
+
+- `yolov5` format: output as-is `[1, N, 5+C]` with objectness score
+- `yolov8`: split off objectness, multiply `obj * cls`, transpose; `[1, 4+C, N]`
+
+The result is a single ONNX model with one input (`images`) and one output (`output0`), fully compatible with standard inference runtimes: ONNX Runtime, OpenCV DNN, TensorRT via `trtexec`. For TensorRT you just need to run:
+
+```bash
+trtexec --onnx=pretrained/yolov4-tiny-convertex-to-v8-format.onnx --saveEngine=pretrained/yolov4-tiny-convertex-to-trt-format.engine --fp16      
+```
+
+I've tested TensorRT only with `yolov8` format, since (as I believe) it fuses the objectness score into the class probabilities which is more efficient for inference. The `yolov5` format should also work but may require additional post-processing to apply the objectness score.
 
 ## License
 
