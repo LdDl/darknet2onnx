@@ -45,7 +45,7 @@ func Convert(sections []darknet.Section, weights []darknet.LayerWeights, opsetVe
 	var allInitializers []*pb.TensorProto
 
 	// Input tensor
-	inputName := "input"
+	inputName := "images"
 
 	// Track layer index (skipping [net])
 	// In Darknet, layer indices start at 0 for the first layer after [net]
@@ -236,7 +236,7 @@ func Convert(sections []darknet.Section, weights []darknet.LayerWeights, opsetVe
 		})
 
 		// 4. Transpose [1, N, 4+C] -> [1, 4+C, N]
-		finalOutputName = "detections"
+		finalOutputName = "output0"
 		allNodes = append(allNodes, &pb.NodeProto{
 			OpType: "Transpose",
 			Input:  []string{mergedOut},
@@ -249,7 +249,7 @@ func Convert(sections []darknet.Section, weights []darknet.LayerWeights, opsetVe
 		outputShape = []int64{1, int64(4 + numClasses), -1}
 	} else {
 		// yolov5 format: [1, N, 5+C] as-is
-		finalOutputName = "detections"
+		finalOutputName = "output0"
 		if concatOutputName != finalOutputName {
 			allNodes = append(allNodes, &pb.NodeProto{
 				OpType: "Identity",
