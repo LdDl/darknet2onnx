@@ -64,6 +64,8 @@ Two output formats are available via `--format`:
 
 where `N` is the total number of predictions and `C` is the number of classes.
 
+Input tensor is named `images`, output tensor is named `output0`. This follows the Ultralytics naming convention, so the output ONNX should be compatible with most inference pipelines that expect this convention. Note that this is not "traditional" YOLO output format, but widly supported I believe.
+
 This could not work for you, but in my case these formats are compatible with [od_opencv](https://github.com/LdDl/object-detection-opencv-rust):
 - `yolov5` -> `Model::yolov5_ort()`
 - `yolov8` -> `Model::ort()`
