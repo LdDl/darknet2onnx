@@ -50,6 +50,7 @@ func BuildYoloDecode(
 	numClasses := sec.GetInt("classes", 80)
 
 	scaleXY := sec.GetFloat("scale_x_y", 1.0)
+	newCoords := sec.GetInt("new_coords", 0)
 
 	numAnchors := len(mask)
 	gridH := inputShape.H
@@ -97,21 +98,38 @@ func BuildYoloDecode(
 		},
 	})
 
-	// 3a. Sigmoid on tx, ty
-	sigTxTy := prefix + "_sig_txty"
-	nodes = append(nodes, &pb.NodeProto{
-		OpType: "Sigmoid",
-		Input:  []string{splitOut0},
-		Output: []string{sigTxTy},
-	})
+	// new_coords=1 (YOLOv7): activation=logistic on prev conv already applied sigmoid
+	// to ALL outputs. Decode uses different formulas for xy and wh.
+	// new_coords=0 (YOLOv3/v4): standard decode with sigmoid in yolo layer.
 
-	// 3b. Sigmoid on objectness + class scores
-	sigObjCls := prefix + "_sig_obj_cls"
-	nodes = append(nodes, &pb.NodeProto{
-		OpType: "Sigmoid",
-		Input:  []string{splitOut2},
-		Output: []string{sigObjCls},
-	})
+	// name of processed tx/ty tensor
+	var txtyProcessed string
+	// name of processed obj/cls tensor
+	var objClsProcessed string
+
+	if newCoords == 1 {
+		// Already sigmoided by activation=logistic, no additional sigmoid needed
+		txtyProcessed = splitOut0
+		objClsProcessed = splitOut2
+	} else {
+		// 3a. Sigmoid on tx, ty
+		sigTxTy := prefix + "_sig_txty"
+		nodes = append(nodes, &pb.NodeProto{
+			OpType: "Sigmoid",
+			Input:  []string{splitOut0},
+			Output: []string{sigTxTy},
+		})
+		txtyProcessed = sigTxTy
+
+		// 3b. Sigmoid on objectness + class scores
+		sigObjCls := prefix + "_sig_obj_cls"
+		nodes = append(nodes, &pb.NodeProto{
+			OpType: "Sigmoid",
+			Input:  []string{splitOut2},
+			Output: []string{sigObjCls},
+		})
+		objClsProcessed = sigObjCls
+	}
 
 	// 4. Add grid offsets to tx, ty
 	gridX, gridY := generateGrid(gridH, gridW)
@@ -134,7 +152,7 @@ func BuildYoloDecode(
 		},
 	})
 
-	// Apply scale_x_y: sigmoid(tx) * scale_x_y - (scale_x_y - 1) / 2 + grid
+	// Apply scale_x_y: tx * scale_x_y - (scale_x_y - 1) / 2 + grid
 	var xyBeforeGrid string
 	if scaleXY != 1.0 {
 		scaleName := prefix + "_scale_xy_val"
@@ -146,7 +164,7 @@ func BuildYoloDecode(
 		mulOut := prefix + "_sig_scaled"
 		nodes = append(nodes, &pb.NodeProto{
 			OpType: "Mul",
-			Input:  []string{sigTxTy, scaleName},
+			Input:  []string{txtyProcessed, scaleName},
 			Output: []string{mulOut},
 		})
 		subOut := prefix + "_sig_shifted"
@@ -157,10 +175,10 @@ func BuildYoloDecode(
 		})
 		xyBeforeGrid = subOut
 	} else {
-		xyBeforeGrid = sigTxTy
+		xyBeforeGrid = txtyProcessed
 	}
 
-	// scaled_sigmoid(tx) + grid_offset
+	// xy + grid_offset
 	addedXY := prefix + "_added_xy"
 	nodes = append(nodes, &pb.NodeProto{
 		OpType: "Add",
@@ -181,14 +199,7 @@ func BuildYoloDecode(
 		Output: []string{scaledXY},
 	})
 
-	// 5. Apply exp to tw, th and multiply by anchors
-	expTwTh := prefix + "_exp_twth"
-	nodes = append(nodes, &pb.NodeProto{
-		OpType: "Exp",
-		Input:  []string{splitOut1},
-		Output: []string{expTwTh},
-	})
-
+	// 5. Decode width/height and multiply by anchors
 	// Build anchor tensor [1, A, 1, 1, 2] from mask indices
 	anchorData := make([]float32, numAnchors*2)
 	for i, m := range mask {
@@ -202,18 +213,51 @@ func BuildYoloDecode(
 	anchorsName := prefix + "_anchors"
 	inits = append(inits, makeFloatTensor(anchorsName, []int64{1, int64(numAnchors), 1, 1, 2}, anchorData))
 
-	scaledWH := prefix + "_scaled_wh"
-	nodes = append(nodes, &pb.NodeProto{
-		OpType: "Mul",
-		Input:  []string{expTwTh, anchorsName},
-		Output: []string{scaledWH},
-	})
+	var scaledWH string
+	if newCoords == 1 {
+		// new_coords=1: wh = (tw * 2)^2 * anchor
+		twoName := prefix + "_two"
+		inits = append(inits, makeFloatTensor(twoName, []int64{1}, []float32{2.0}))
+
+		mulTwo := prefix + "_wh_mul2"
+		nodes = append(nodes, &pb.NodeProto{
+			OpType: "Mul",
+			Input:  []string{splitOut1, twoName},
+			Output: []string{mulTwo},
+		})
+		squared := prefix + "_wh_sq"
+		nodes = append(nodes, &pb.NodeProto{
+			OpType: "Mul",
+			Input:  []string{mulTwo, mulTwo},
+			Output: []string{squared},
+		})
+		scaledWH = prefix + "_scaled_wh"
+		nodes = append(nodes, &pb.NodeProto{
+			OpType: "Mul",
+			Input:  []string{squared, anchorsName},
+			Output: []string{scaledWH},
+		})
+	} else {
+		// Standard: wh = exp(tw) * anchor
+		expTwTh := prefix + "_exp_twth"
+		nodes = append(nodes, &pb.NodeProto{
+			OpType: "Exp",
+			Input:  []string{splitOut1},
+			Output: []string{expTwTh},
+		})
+		scaledWH = prefix + "_scaled_wh"
+		nodes = append(nodes, &pb.NodeProto{
+			OpType: "Mul",
+			Input:  []string{expTwTh, anchorsName},
+			Output: []string{scaledWH},
+		})
+	}
 
 	// 6. Concat all parts back: [xy, wh, obj_cls] along last axis
 	concatOut := prefix + "_concat"
 	nodes = append(nodes, &pb.NodeProto{
 		OpType: "Concat",
-		Input:  []string{scaledXY, scaledWH, sigObjCls},
+		Input:  []string{scaledXY, scaledWH, objClsProcessed},
 		Output: []string{concatOut},
 		Attribute: []*pb.AttributeProto{
 			makeAttrInt("axis", 4),
