@@ -4,8 +4,6 @@ Convert Darknet `.cfg` + `.weights` to ONNX format.
 
 A standalone Go CLI tool that produces a single static binary with no Python or pip dependencies.
 
-WARNING: IT IS IN W.I.P. STAGE. I DID JUST SYNTHETIC TESTS ON A FEW MODELS, SO THIS MAY NOT WORK. I WILL REMOVE THIS WARNING ONCE I TEST IT ON MORE MODELS AND SCENARIOS.
-
 ## Table of Contents
 
 - [Installation](#installation)
