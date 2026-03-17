@@ -39,7 +39,14 @@ Download the latest release for your platform from [Releases](https://github.com
 | macOS arm64 | [`darwin-arm64-darknet2onnx.tar.gz`](https://github.com/LdDl/darknet2onnx/releases/latest/download/darwin-arm64-darknet2onnx.tar.gz) |
 | Windows amd64 | [`windows-amd64-darknet2onnx.zip`](https://github.com/LdDl/darknet2onnx/releases/latest/download/windows-amd64-darknet2onnx.zip) |
 
-Extract and place the binary somewhere in your `$PATH`.
+Extract and place the binary somewhere in your `PATH`. E.g. quick install on Linux (amd64):
+
+```bash
+curl -fsSL https://github.com/LdDl/darknet2onnx/releases/latest/download/linux-amd64-darknet2onnx.tar.gz \
+  | sudo tar -xz -C /usr/local/bin darknet2onnx
+```
+
+For arm64 replace `linux-amd64` with `linux-arm64`.
 
 ## Supported models
 
